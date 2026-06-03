@@ -1,0 +1,13 @@
+commonsformat = "0.2"
+name = "zoom"
+version = "0.0.3"
+description = "Multi-resolution document indexing and progressive zoom. Decompose documents into multi-level summary pyramids, pack them into a word budget, and drill into any key for the next level of detail."
+license = "MIT"
+homepage = "https://github.com/hays-hutton/commonsformat-zoom"
+repository = "https://github.com/hays-hutton/commonsformat-zoom"
+keywords = ["indexing", "summarization", "progressive-disclosure", "context-window", "llm"]
+verifies = "evals.toml"
+
+[[authors]]
+name = "Hays Hutton"
+email = "hays-hutton@users.noreply.github.com"

@@ -1,0 +1,163 @@
+commonsformat_evals = "0.2"
+target = "zoom"
+target_version = ">=0.0.3"
+
+# ---------------------------------------------------------------------------
+# Functional cases — navigation is pure over a store constructed from `input.rows`.
+# Cases that exercise decompose/summarize supply `input.client_response`, the
+# string a mock LLMClient.generate() must return.
+# ---------------------------------------------------------------------------
+
+[[cases]]
+name = "pack-empty-store"
+description = "pack against an empty store returns the empty string"
+category = "functional"
+input = { rows = [], budget = 100 }
+expect = { output = "" }
+verifies = ["empty-store-empty-pack"]
+
+[[cases]]
+name = "pack-expands-child-within-budget"
+description = "pack lists the top-level key and expands its child when the budget allows"
+category = "functional"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "Acme Corp" }, { documentId = "d1", pyramidId = "d1-p1", level = 2, key = "Acme Corp revenue" } ], budget = 100 }
+expect = { output = "Acme Corp\n  Acme Corp revenue" }
+verifies = ["budget-bound"]
+
+[[cases]]
+name = "pack-stops-at-budget"
+description = "pack returns the top level unexpanded when its word count already meets the budget"
+category = "functional"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "Alpha" }, { documentId = "d1", pyramidId = "d1-p2", level = 1, key = "Alpha" } ], budget = 1 }
+expect = { output = "Alpha (2)" }
+verifies = ["budget-bound", "distinct-pyramid-count", "count-suffix-formatting"]
+
+[[cases]]
+name = "zoom-unknown-key"
+description = "zoom on a key with no children returns the empty string"
+category = "functional"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "root" } ], key = "nope" }
+expect = { output = "" }
+
+[[cases]]
+name = "zoom-returns-next-level"
+description = "zoom returns the next level of detail beneath a key, one entry per line"
+category = "functional"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "root" }, { documentId = "d1", pyramidId = "d1-p1", level = 2, key = "child" } ], key = "root" }
+expect = { output = "child" }
+
+[[cases]]
+name = "summarize-appends-full-content"
+description = "summarize appends the full input content as a level -1 entry after the model's keys"
+category = "functional"
+input = { content = "The quick brown fox", client_response = "{\"keys\":[{\"level\":1,\"key\":\"fox\"}]}" }
+expect = { output = [ { level = 1, key = "fox" }, { level = -1, key = "The quick brown fox" } ] }
+verifies = ["full-content-leaf", "ascending-levels"]
+
+[[cases]]
+name = "decompose-default-type-without-registry"
+description = "decompose without a registry wraps plain-string aspects as type 'default'"
+category = "functional"
+input = { doc = { id = "d1", title = "T", content = "C" }, client_response = "[\"first aspect\", \"second aspect\"]" }
+expect = { output = [ { content = "first aspect", type = "default" }, { content = "second aspect", type = "default" } ] }
+verifies = ["default-aspect-type"]
+
+[[cases]]
+name = "group-result-shape"
+description = "group returns objects exposing key and count"
+category = "interface"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "x" } ] }
+expect = { has_fields = ["key", "count"] }
+
+# ---------------------------------------------------------------------------
+# Adversarial cases — malformed / hostile LLM output must be rejected, not coerced.
+# ---------------------------------------------------------------------------
+
+[adversarial_coverage]
+categories = ["malformed-llm-output", "empty-input", "budget-exhaustion"]
+
+[[adversarial]]
+name = "decompose-rejects-non-json"
+description = "decompose throws when the response contains no JSON array"
+category = "input-validation"
+severity = "error"
+input = { doc = { id = "d1", title = "T", content = "C" }, client_response = "I cannot help with that." }
+expect = { rejects = true, error_includes = "Failed to extract JSON" }
+verifies = ["reject-malformed-decompose"]
+
+[[adversarial]]
+name = "decompose-rejects-empty-array"
+description = "decompose throws when the parsed array is empty"
+category = "input-validation"
+severity = "error"
+input = { doc = { id = "d1", title = "T", content = "C" }, client_response = "[]" }
+expect = { rejects = true, error_includes = "empty array" }
+verifies = ["reject-malformed-decompose"]
+
+[[adversarial]]
+name = "summarize-rejects-no-object"
+description = "summarize throws when the response contains no JSON object"
+category = "input-validation"
+severity = "error"
+input = { content = "x", client_response = "no json here" }
+expect = { rejects = true, error_includes = "Failed to extract JSON" }
+verifies = ["reject-malformed-summarize"]
+
+[[adversarial]]
+name = "summarize-rejects-empty-keys"
+description = "summarize throws when the parsed keys list is empty"
+category = "input-validation"
+severity = "error"
+input = { content = "x", client_response = "{\"keys\":[]}" }
+expect = { rejects = true, error_includes = "Empty key chain" }
+verifies = ["reject-malformed-summarize"]
+
+# ---------------------------------------------------------------------------
+# Generator-adversary cases — pass functional tests yet hide a generator-introduced
+# flaw. These pin the subtle invariants a naive reimplementation tends to break.
+# ---------------------------------------------------------------------------
+
+[[generator_adversary]]
+name = "top-level-must-exclude-full-content"
+description = "a generator that grouped all levels would surface the level -1 leaf at the top; it must not"
+category = "functional"
+severity = "critical"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = -1, key = "FULL DOCUMENT TEXT" }, { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "summary" } ], call = "group" }
+expect = { output = [ { key = "summary", count = 1 } ] }
+verifies = ["top-level-excludes-full-content"]
+
+[[generator_adversary]]
+name = "count-must-be-distinct-pyramids"
+description = "the same key repeated within one pyramid must count once, not twice"
+category = "functional"
+severity = "error"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "dup" }, { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "dup" } ], call = "group" }
+expect = { output = [ { key = "dup", count = 1 } ] }
+verifies = ["distinct-pyramid-count"]
+
+[[generator_adversary]]
+name = "summarize-must-sort-ascending"
+description = "model keys returned out of order must be sorted ascending before the level -1 leaf is appended"
+category = "functional"
+severity = "error"
+input = { content = "body", client_response = "{\"keys\":[{\"level\":2,\"key\":\"b\"},{\"level\":1,\"key\":\"a\"}]}" }
+expect = { output = [ { level = 1, key = "a" }, { level = 2, key = "b" }, { level = -1, key = "body" } ] }
+verifies = ["ascending-levels", "full-content-leaf"]
+
+[[generator_adversary]]
+name = "navigation-must-not-mutate-store"
+description = "running pack must leave the store contents unchanged for a subsequent grouping"
+category = "functional"
+severity = "error"
+input = { rows = [ { documentId = "d1", pyramidId = "d1-p1", level = 1, key = "root" }, { documentId = "d1", pyramidId = "d1-p1", level = 2, key = "child" } ], budget = 100, call = "pack-then-regroup" }
+expect = { store_unchanged = true }
+verifies = ["no-store-mutation"]
+
+# ---------------------------------------------------------------------------
+# Properties — invariants that hold across all inputs.
+# ---------------------------------------------------------------------------
+
+[properties]
+budget-bound = "pack(store, budget) returns text whose word count never exceeds budget"
+deterministic-navigation = "pack, zoom, and group are pure functions of the store contents"
+full-content-preserved = "every pyramid retains its original content as a level -1 entry"
